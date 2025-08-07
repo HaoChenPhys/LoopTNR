@@ -1,6 +1,6 @@
 # LoopTNR
 
-Implementation of the [loop-TNR](https://arxiv.org/abs/1512.04938) algorithm.
+Implementation of the [loop-TNR](https://arxiv.org/abs/1512.04938) algorithm, inspired by [TNRKit](https://github.com/VictorVanthilt/TNRKit.jl).
 
 It supports
 

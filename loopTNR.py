@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.optim import LBFGS
 
+import logging, argparse, pickle
 from dataclasses import dataclass
 from typing import Union
 
@@ -94,22 +95,22 @@ class LoopTNR(Peps):
         '''
         Return a generator that yields independent decomp_T tensors.
         '''
-        masked = set()
+        marked = set()
         site = self.sites()[0]
         for _ in range(self.dims[0]):
             for _ in range(self.dims[1]):
                 tl, tr, bl, br = self.site2index(site), self.site2index(self.nn_site(site, "r")), self.site2index(self.nn_site(site, "b")), self.site2index(self.nn_site(site, "br"))
-                if (tl, "br") not in masked:
-                    masked.add((tl, "br"))
+                if (tl, "br") not in marked:
+                    marked.add((tl, "br"))
                     yield self.psi_rg[self.site_rg_map[(tl, "br")][1]].tl
-                if (tr, "tr") not in masked:
-                    masked.add((tr, "tr"))
+                if (tr, "tr") not in marked:
+                    marked.add((tr, "tr"))
                     yield self.psi_rg[self.site_rg_map[(tr, "tr")][0]].tr
-                if (br, "br") not in masked:
-                    masked.add((br, "br"))
+                if (br, "br") not in marked:
+                    marked.add((br, "br"))
                     yield self.psi_rg[self.site_rg_map[(br, "br")][0]].br
-                if (bl, "tr") not in masked:
-                    masked.add((bl, "tr"))
+                if (bl, "tr") not in marked:
+                    marked.add((bl, "tr"))
                     yield self.psi_rg[self.site_rg_map[(bl, "tr")][1]].bl
                 site = self.nn_site(site, (-1, 1))
             site = self.nn_site(site, (1, 1))
@@ -437,7 +438,7 @@ class LoopTNR(Peps):
         for epoch in range(1, epochs+1):
             loss = optimizer.step(closure)
             # print(f"epoch-{epoch:d}: loss={loss}")
-            if torch.abs(loss - loss_history[-1]) < loop_threshold:
+            if torch.isclose(loss, torch.zeros(1, dtype=loss.dtype)) or torch.abs(loss - loss_history[-1])/torch.abs(loss) < loop_threshold:
                 break
             loss_history.append(loss)
 
@@ -463,8 +464,12 @@ class LoopTNR(Peps):
             hyper-parameter for the nuclear-norm regularization
         """
         if method == "ALS":
-            for site in self.psi.sites():
-                self.entanglement_filtering(site, filter_max_sweeps, conv_check=lambda err_prev, err: abs(err_prev - err) < filter_threshold)
+            # marked = set()
+            # for site in self.psi.sites():
+            #     ind = self.psi.site2index(site)
+            #     if ind not in marked:
+            #         self.entanglement_filtering(site, filter_max_sweeps, conv_check=lambda err_prev, err: abs(err_prev - err) < filter_threshold)
+            #         marked.add(ind)
             # loop compression
             truncate_err = self.loop_optimize(max_sweeps, loop_threshold)
             truncate_err = sum(truncate_err.values())/len(truncate_err)
@@ -488,25 +493,54 @@ class LoopTNR(Peps):
         return truncate_err
 
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--D_max", type=int, default=8)
+    parser.add_argument("--max_sweeps", type=int, default=100)
+    parser.add_argument("--max_rg_steps", type=int, default=25)
+    parser.add_argument("--mu", type=float, default=0.0)
+    parser.add_argument("--method", type=str, default="AD")
+    parser.add_argument("--filter_threshold", type=float, default=1e-9)
+    parser.add_argument("--filter_max_sweeps", type=int, default=int(5e3))
+    parser.add_argument("--loop_threshold", type=float, default=1e-9)
+    parser.add_argument("--output", type=str, default="tmp")
+    parser.add_argument("--num_threads", type=int, default=4)
+    args = parser.parse_args()
 
-if __name__ == "__main__":
+    torch.set_num_threads(args.num_threads)
+    logfile = args.output + ".log"
+    logging.basicConfig(
+        filename=logfile,              # <— log file path (relative or absolute)
+        level=logging.INFO,
+        format="%(message)s",
+    )
+
+
     beta_c = Ising_critical_beta()
-
-    D_max = 16
-    max_sweeps = 100
+    D_max, max_sweeps, max_rg_steps, mu = args.D_max, args.max_sweeps, args.max_rg_steps, args.mu
+    filter_max_sweeps, filter_threshold, loop_threshold = args.filter_max_sweeps, args.filter_threshold, args.loop_threshold
+    method = args.method
 
     f_history = []
     psi = Ising_Z2_symmetric(beta=beta_c)
     loop_tnr = LoopTNR(psi, D_max)
 
     res = 0
-    mu = 0.0
-    method = "ALS"
-    for step in range(25):
-        truncate_err = loop_tnr.rg(max_sweeps, method=method, filter_max_sweeps=int(5e3), loop_threshold=1e-9, mu=mu)
+    logging.info(f"beta={beta_c:.6f}, method={method}, D_max={D_max:d}, max_sweeps={max_sweeps:d}, max_rg_steps={max_rg_steps}")
+    logging.info(f"parameters: mu={mu}, filter_max_sweeps={filter_max_sweeps}, filter_threshold={filter_threshold}, loop_threshold={loop_threshold}")
+    for step in range(max_rg_steps):
+        truncate_err = loop_tnr.rg(max_sweeps, method=method, filter_max_sweeps=filter_max_sweeps, filter_threshold=filter_threshold, loop_threshold=loop_threshold, mu=mu)
         norm = Ising_post_processing(loop_tnr)
         res += np.log(norm)/2**(step+1)
-        print(f"beta={beta_c:.6f}, step-{step:d}: truncation error={truncate_err}, norm={norm}")
+        logging.info(f"step-{step:d}: truncation error={truncate_err}, norm={norm}")
         f = -1/beta_c *(res + np.log(trace_2x2(loop_tnr))/2**(step+3)).real
-        f_history.append(f)
-    print(f_history)
+        f_history.append(f.numpy())
+    logging.info(f_history)
+
+    F_file = args.output + "_free_energies_conv"
+    with open(F_file, "wb") as handle:
+        pickle.dump(f_history, handle)
+
+
+if __name__ == "__main__":
+    main()
