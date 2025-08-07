@@ -117,6 +117,22 @@ class LoopTNR(Peps):
     def get_decomp_T_data(self):
         return list(T._data for T in self.indep_decomp_T())
 
+    def sync_decomp_T_(self):
+        site = self.sites()[0]
+        site_rg = self.sites()[0]
+        for _ in range(self.dims[0]):
+            for _ in range(self.dims[1]):
+                tl, tr, bl, br = self.site2index(site), self.site2index(self.nn_site(site, "r")), self.site2index(self.nn_site(site, "b")), self.site2index(self.nn_site(site, "br"))
+                self.psi_rg[site_rg].tl = self.psi_rg[self.site_rg_map[(tl, "br")][1]].tl
+                self.psi_rg[site_rg].tr = self.psi_rg[self.site_rg_map[(tr, "tr")][0]].tr
+                self.psi_rg[site_rg].br = self.psi_rg[self.site_rg_map[(br, "br")][0]].br
+                self.psi_rg[site_rg].bl = self.psi_rg[self.site_rg_map[(bl, "tr")][1]].bl
+
+                site = self.nn_site(site, (-1, 1))
+                site_rg = self.nn_site(site_rg, (0, 1))
+
+            site = self.nn_site(site, (1, 1))
+            site_rg = self.nn_site(site_rg, (1, 0))
 
     @torch.no_grad()
     def init_psi_rg(self, D_max):
@@ -131,51 +147,51 @@ class LoopTNR(Peps):
         site_rg = self.sites()[0]
         for _ in range(self.dims[0]):
             for _ in range(self.dims[1]):
-                tl, tr, bl, br = self.site2index(site), self.site2index(self.nn_site(site, "r")), self.site2index(self.nn_site(site, "b")), self.site2index(self.nn_site(site, "br"))
-
+                tl, tr, bl, br = site, self.nn_site(site, "r"), self.nn_site(site, "b"), self.nn_site(site, "br")
+                tl_ind, tr_ind, bl_ind, br_ind = self.site2index(tl), self.site2index(tr), self.site2index(bl), self.site2index(br)
                 if self.psi_rg[site_rg].tl is None:
-                    if (tl, "br") in self.site_rg_map:
-                        self.psi_rg[site_rg].tl = self.psi_rg[self.site_rg_map[(tl, "br")][1]].tl
+                    if (tl_ind, "br") in self.site_rg_map:
+                        self.psi_rg[site_rg].tl = self.psi_rg[self.site_rg_map[(tl_ind, "br")][1]].tl
                     else:
                         u, s, v = self.psi[tl].svd_with_truncation(axes=((0, 1), (2, 3)), sU=1, policy='fullrank',
                                                                     tol=1e-12, D_total=D_max, truncate_multiplets=True)
-                        site_rg_t = self.site2index(self.psi_rg.nn_site(site_rg, "t"))
+                        site_rg_t = self.psi_rg.nn_site(site_rg, "t")
                         self.psi_rg[site_rg_t].br = u@s.sqrt()
                         self.psi_rg[site_rg].tl = s.sqrt()@v
-                        self.site_rg_map[(tl, "br")] = (site_rg_t, site_rg)
+                        self.site_rg_map[(tl_ind, "br")] = (site_rg_t, site_rg)
 
                 if self.psi_rg[site_rg].tr is None:
-                    if (tr, "tr") in self.site_rg_map:
-                        self.psi_rg[site_rg].tr = self.psi_rg[self.site_rg_map[(tr, "tr")][0]].tr
+                    if (tr_ind, "tr") in self.site_rg_map:
+                        self.psi_rg[site_rg].tr = self.psi_rg[self.site_rg_map[(tr_ind, "tr")][0]].tr
                     else:
                         u, s, v = self.psi[tr].svd_with_truncation(axes=((1, 2), (0, 3)), sU=1, policy='fullrank',
                                                                     tol=1e-12, D_total=D_max, truncate_multiplets=True)
-                        site_rg_r = self.site2index(self.psi_rg.nn_site(site_rg, "r"))
+                        site_rg_r = self.psi_rg.nn_site(site_rg, "r")
                         self.psi_rg[site_rg].tr = u@s.sqrt()
                         self.psi_rg[site_rg_r].bl = s.sqrt()@v
-                        self.site_rg_map[(tr, "tr")] = (site_rg, site_rg_r)
+                        self.site_rg_map[(tr_ind, "tr")] = (site_rg, site_rg_r)
 
                 if self.psi_rg[site_rg].br is None:
-                    if (br, "br") in self.site_rg_map:
-                        self.psi_rg[site_rg].br = self.psi_rg[self.site_rg_map[(br, "br")][0]].br
+                    if (br_ind, "br") in self.site_rg_map:
+                        self.psi_rg[site_rg].br = self.psi_rg[self.site_rg_map[(br_ind, "br")][0]].br
                     else:
                         u, s, v = self.psi[br].svd_with_truncation(axes=((0, 1), (2, 3)), sU=1, policy='fullrank',
                                                                     tol=1e-12, D_total=D_max, truncate_multiplets=True)
-                        site_rg_b = self.site2index(self.psi_rg.nn_site(site_rg, "b"))
+                        site_rg_b = self.psi_rg.nn_site(site_rg, "b")
                         self.psi_rg[site_rg].br = u@s.sqrt()
                         self.psi_rg[site_rg_b].tl = s.sqrt()@v
-                        self.site_rg_map[(br, "br")] = (site_rg, site_rg_b)
+                        self.site_rg_map[(br_ind, "br")] = (site_rg, site_rg_b)
 
                 if self.psi_rg[site_rg].bl is None:
-                    if (bl, "tr") in self.site_rg_map:
-                        self.psi_rg[site_rg].bl = self.psi_rg[self.site_rg_map[(bl, "tr")][1]].bl
+                    if (bl_ind, "tr") in self.site_rg_map:
+                        self.psi_rg[site_rg].bl = self.psi_rg[self.site_rg_map[(bl_ind, "tr")][1]].bl
                     else:
                         u, s, v = self.psi[bl].svd_with_truncation(axes=((1, 2), (0, 3)), sU=1, policy='fullrank',
                                                                     tol=1e-12, D_total=D_max, truncate_multiplets=True)
-                        site_rg_l = self.site2index(self.psi_rg.nn_site(site_rg, "l"))
+                        site_rg_l = self.psi_rg.nn_site(site_rg, "l")
                         self.psi_rg[site_rg_l].tr = u@s.sqrt()
                         self.psi_rg[site_rg].bl = s.sqrt()@v
-                        self.site_rg_map[(bl, "tr")] = (site_rg_l, site_rg)
+                        self.site_rg_map[(bl_ind, "tr")] = (site_rg_l, site_rg)
 
                 site = self.nn_site(site, (-1, 1))
                 site_rg = self.nn_site(site_rg, (0, 1))
@@ -188,18 +204,17 @@ class LoopTNR(Peps):
         r"""
         Perform entanglement-filtering for the plaquette specified by site_tl (top-left corner).
         """
+        sites = (site_tl, self.nn_site(site_tl, "r"), self.nn_site(site_tl, "br"), self.nn_site(site_tl, "b"))
+        transpose_order = [(2, 1, 0, 3), (1, 0, 3, 2), (0, 3, 2, 1), (3, 2, 1, 0)]
         if max_sweeps > 0:
             psi_As = self.psiA_mps(site_tl)
             PLs, PRs = projectors(psi_As, max_sweeps, conv_check)
-            for i in range(len(psi_As)):
-                psi_As[i] = PLs[i]@psi_As[i]@PRs[i]
 
             # update PEPS tensors
-            site_tr, site_bl, site_br = self.nn_site(site_tl, "r"), self.nn_site(site_tl, "b"), self.nn_site(site_tl, "br")
-            self.psi[site_tl] = psi_As[0].transpose(axes=(2, 1, 0, 3))
-            self.psi[site_tr] = psi_As[1].transpose(axes=(1, 0, 3, 2))
-            self.psi[site_br] = psi_As[2].transpose(axes=(0, 3, 2, 1))
-            self.psi[site_bl] = psi_As[3].transpose(axes=(3, 2, 1, 0))
+            for i in range(len(PLs)):
+                psi_Ai = self.psi[sites[i]].transpose(transpose_order[i]) # to mps
+                psi_Ai = PLs[i]@psi_Ai@PRs[i] # projection
+                self.psi[sites[i]] = psi_Ai.transpose(transpose_order[i]) # back to peps
 
     def psiA_mps(self, site_tl):
         '''
@@ -255,6 +270,9 @@ class LoopTNR(Peps):
 
     @torch.no_grad()
     def loop_optimize(self, max_sweeps, threshold=1e-6):
+        """
+        Perform alternating-least-squares optimization to compress the periodic mps.
+        """
         # initialization
         self.init_psi_rg(self.D_max)
         psi_A_dict, psi_B_dict = {}, {}
@@ -268,19 +286,18 @@ class LoopTNR(Peps):
         site = self.nn_site(self.sites()[0], 'b')
         for _ in range(self.dims[0]):
             for _ in range(self.dims[1]):
-                site = self.site2index(site)
-                psi_A_dict[site] = self.psiA_mps(site)
-                psi_B_dict[site] = self.psiB_mps(site)
-                AA_norm[site] = get_norm(TM_psiA_psiA(psi_A_dict[site]))
-                TM_AB_dict[site] = TM_psiA_psi_B(psi_A_dict[site], psi_B_dict[site])
-                TM_BB_dict[site] = TM_psiB_psiB(psi_B_dict[site])
-                env_AB_L_dict[site], env_AB_R_dict[site] = [], []
-                env_BB_L_dict[site], env_BB_R_dict[site] = [], []
-                env_L_start[site], env_R_start[site] = 0, 7
-                truncate_err[site] = np.inf
+                ind = self.site2index(site)
+                psi_A_dict[ind] = self.psiA_mps(site)
+                psi_B_dict[ind] = self.psiB_mps(site)
+                AA_norm[ind] = get_norm(TM_psiA_psiA(psi_A_dict[ind]))
+                TM_AB_dict[ind] = TM_psiA_psi_B(psi_A_dict[ind], psi_B_dict[ind])
+                TM_BB_dict[ind] = TM_psiB_psiB(psi_B_dict[ind])
+                env_AB_L_dict[ind], env_AB_R_dict[ind] = [], []
+                env_BB_L_dict[ind], env_BB_R_dict[ind] = [], []
+                env_L_start[ind], env_R_start[ind] = 0, 7
+                truncate_err[ind] = np.inf
                 site = self.nn_site(site, (-1, 1))
             site = self.nn_site(site, (1, 1))
-
 
         drs = [(-1, -1), (-1, 0), (0, 0), (0, -1)] # vectors pointing to the the top-left corner of the edge-sharing plaquettes
         sp_optim_pos = [(5, 4), (7, 6), (1, 0), (3, 2)] # indices of the optimized sites in the edge-sharing psi_Bs
@@ -291,38 +308,41 @@ class LoopTNR(Peps):
             site = self.nn_site(self.sites()[0], 'b')
             for _ in range(self.dims[0]):
                 for _ in range(self.dims[1]):
-                    loop_sites = self.site2index(site), self.site2index(self.nn_site(site, "r")), self.site2index(self.nn_site(site, "br")), self.site2index(self.nn_site(site, "b"))
+                    loop_sites = site, self.nn_site(site, "r"), self.nn_site(site, "br"), self.nn_site(site, "b")
 
-                    tl = loop_sites[0]
-                    psi_A1, psi_B1 = psi_A_dict[tl], psi_B_dict[tl]
+                    tl_ind = self.site2index(loop_sites[0])
+                    psi_A1, psi_B1 = psi_A_dict[tl_ind], psi_B_dict[tl_ind]
                     B1_pos = 0
                     for i, s in enumerate(loop_sites):
                         dr = drs[i]
                         optim_pos = sp_optim_pos[i]
-                        sp = self.site2index(self.nn_site(s, dr))
-                        psi_A2, psi_B2 = psi_A_dict[sp], psi_B_dict[sp]
+                        sp_ind = self.site2index(self.nn_site(s, dr))
+                        psi_A2, psi_B2 = psi_A_dict[sp_ind], psi_B_dict[sp_ind]
                         for j, B2_pos in enumerate(optim_pos):
-                            env_AB_L_dict[tl] = env_L_list(TM_AB_dict[tl], env_L_start[tl]//2, B1_pos//2, env_Ls=env_AB_L_dict[tl])
-                            env_AB_R_dict[tl] = env_R_list(TM_AB_dict[tl], env_R_start[tl]//2, B1_pos//2, env_Rs=env_AB_R_dict[tl])
-                            env_BB_L_dict[tl] = env_L_list(TM_BB_dict[tl], env_L_start[tl], B1_pos, env_Ls=env_BB_L_dict[tl])
-                            env_BB_R_dict[tl] = env_R_list(TM_BB_dict[tl], env_R_start[tl], B1_pos, env_Rs=env_BB_R_dict[tl])
+                            env_AB_L_dict[tl_ind] = env_L_list(TM_AB_dict[tl_ind], env_L_start[tl_ind]//2, B1_pos//2, env_Ls=env_AB_L_dict[tl_ind])
+                            env_AB_R_dict[tl_ind] = env_R_list(TM_AB_dict[tl_ind], env_R_start[tl_ind]//2, B1_pos//2, env_Rs=env_AB_R_dict[tl_ind])
+                            env_BB_L_dict[tl_ind] = env_L_list(TM_BB_dict[tl_ind], env_L_start[tl_ind], B1_pos, env_Ls=env_BB_L_dict[tl_ind])
+                            env_BB_R_dict[tl_ind] = env_R_list(TM_BB_dict[tl_ind], env_R_start[tl_ind], B1_pos, env_Rs=env_BB_R_dict[tl_ind])
+                            W1 = W(B1_pos, env_AB_L_dict[tl_ind][B1_pos//2], env_AB_R_dict[tl_ind][B1_pos//2], psi_A1, psi_B1).transpose(self.B_to_decomp_T[B1_pos])
+                            env_L_start[tl_ind], env_R_start[tl_ind] = max(B1_pos, env_L_start[tl_ind]), min(B1_pos, env_R_start[tl_ind])
 
-                            env_AB_L_dict[sp] = env_L_list(TM_AB_dict[sp], env_L_start[sp]//2, B2_pos//2, env_Ls=env_AB_L_dict[sp])
-                            env_AB_R_dict[sp] = env_R_list(TM_AB_dict[sp], env_R_start[sp]//2, B2_pos//2, env_Rs=env_AB_R_dict[sp])
-                            env_BB_L_dict[sp] = env_L_list(TM_BB_dict[sp], env_L_start[sp], B2_pos, env_Ls=env_BB_L_dict[sp])
-                            env_BB_R_dict[sp] = env_R_list(TM_BB_dict[sp], env_R_start[sp], B2_pos, env_Rs=env_BB_R_dict[sp])
+                            env_AB_L_dict[sp_ind] = env_L_list(TM_AB_dict[sp_ind], env_L_start[sp_ind]//2, B2_pos//2, env_Ls=env_AB_L_dict[sp_ind])
+                            env_AB_R_dict[sp_ind] = env_R_list(TM_AB_dict[sp_ind], env_R_start[sp_ind]//2, B2_pos//2, env_Rs=env_AB_R_dict[sp_ind])
+                            env_BB_L_dict[sp_ind] = env_L_list(TM_BB_dict[sp_ind], env_L_start[sp_ind], B2_pos, env_Ls=env_BB_L_dict[sp_ind])
+                            env_BB_R_dict[sp_ind] = env_R_list(TM_BB_dict[sp_ind], env_R_start[sp_ind], B2_pos, env_Rs=env_BB_R_dict[sp_ind])
 
-                            W1 = W(B1_pos, env_AB_L_dict[tl][B1_pos//2], env_AB_R_dict[tl][B1_pos//2], psi_A1, psi_B1).transpose(self.B_to_decomp_T[B1_pos])
-                            W2 = W(B2_pos, env_AB_L_dict[sp][B2_pos//2], env_AB_R_dict[sp][B2_pos//2], psi_A2, psi_B2).transpose(self.B_to_decomp_T[B2_pos])
+                            W2 = W(B2_pos, env_AB_L_dict[sp_ind][B2_pos//2], env_AB_R_dict[sp_ind][B2_pos//2], psi_A2, psi_B2).transpose(self.B_to_decomp_T[B2_pos])
+                            env_L_start[sp_ind], env_R_start[sp_ind] = max(B2_pos, env_L_start[sp_ind]), max(B2_pos, env_R_start[sp_ind])
 
                             def N12(T):
-                                NT1 = NT(env_BB_L_dict[tl][B1_pos], env_BB_R_dict[tl][B1_pos], T.transpose(self.decomp_T_to_B[B1_pos])).transpose(self.B_to_decomp_T[B1_pos])
-                                NT2 = NT(env_BB_L_dict[sp][B2_pos], env_BB_R_dict[sp][B2_pos], T.transpose(self.decomp_T_to_B[B2_pos])).transpose(self.B_to_decomp_T[B2_pos])
+                                NT1 = NT(env_BB_L_dict[tl_ind][B1_pos], env_BB_R_dict[tl_ind][B1_pos], T.transpose(self.decomp_T_to_B[B1_pos])).transpose(self.B_to_decomp_T[B1_pos])
+                                NT2 = NT(env_BB_L_dict[sp_ind][B2_pos], env_BB_R_dict[sp_ind][B2_pos], T.transpose(self.decomp_T_to_B[B2_pos])).transpose(self.B_to_decomp_T[B2_pos])
                                 return NT1+NT2
 
                             # solve the linear system for T
                             dirn = "tr" if i % 2 == 0 else "br"
-                            site_rg = self.site_rg_map[(s, dirn)][j] if B1_pos <= 3 else self.site_rg_map[(s, dirn)][1-j]
+                            s_ind = self.site2index(s)
+                            site_rg = self.site_rg_map[(s_ind, dirn)][j] if B1_pos <= 3 else self.site_rg_map[(s_ind, dirn)][1-j]
                             T0 = getattr(self.psi_rg[site_rg], self.Bpos_to_dirn[B1_pos])
                             T = solve_T(N12, W1+W2, T0)
 
@@ -330,21 +350,20 @@ class LoopTNR(Peps):
                             setattr(self.psi_rg[site_rg], self.Bpos_to_dirn[B1_pos], T)
                             psi_B1[B1_pos] = T.transpose(self.decomp_T_to_B[B1_pos])
                             psi_B2[B2_pos] = T.transpose(self.decomp_T_to_B[B2_pos])
-                            TM_AB_dict[tl][B1_pos//2] = TM_psiA_psi_B(psi_A1, psi_B1, pos=B1_pos//2)
-                            TM_BB_dict[tl][B1_pos] = TM_psiB_psiB(psi_B1, pos=B1_pos)
-                            TM_AB_dict[sp][B2_pos//2] = TM_psiA_psi_B(psi_A2, psi_B2, pos=B2_pos//2)
-                            TM_BB_dict[sp][B2_pos] = TM_psiB_psiB(psi_B2, pos=B2_pos)
-                            env_L_start[tl], env_R_start[tl] = B1_pos, B1_pos
-                            env_L_start[sp], env_R_start[sp] = B2_pos, B2_pos
-
+                            TM_AB_dict[tl_ind][B1_pos//2] = TM_psiA_psi_B(psi_A1, psi_B1, pos=B1_pos//2)
+                            TM_BB_dict[tl_ind][B1_pos] = TM_psiB_psiB(psi_B1, pos=B1_pos)
+                            TM_AB_dict[sp_ind][B2_pos//2] = TM_psiA_psi_B(psi_A2, psi_B2, pos=B2_pos//2)
+                            TM_BB_dict[sp_ind][B2_pos] = TM_psiB_psiB(psi_B2, pos=B2_pos)
+                            env_L_start[tl_ind], env_R_start[tl_ind] = min(B1_pos, env_L_start[tl_ind]), max(B1_pos, env_R_start[tl_ind])
+                            env_L_start[sp_ind], env_R_start[sp_ind] = min(B2_pos, env_L_start[sp_ind]), max(B2_pos, env_R_start[sp_ind])
                             B1_pos += 1
-                    BB_norm1 = TM_BB_dict[tl][7].tensordot(env_BB_L_dict[tl][7], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
-                    AB_norm1 = TM_AB_dict[tl][3].tensordot(env_AB_L_dict[tl][3], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
-                    err = (AA_norm[tl] + BB_norm1 - AB_norm1 - AB_norm1.conj()).to_number()/ AA_norm[tl].to_number()
-                    # print(f"step-{step:d} site: {tl}: {err}")
-                    converged = (converged and (np.abs(err - truncate_err[tl]) < threshold))
-                    truncate_err[tl] = err.real
-                    # print(f"iteration {step}, top-left corner {tl}: truncation error={truncate_err[tl]}")
+
+                    BB_norm1 = TM_BB_dict[tl_ind][7].tensordot(env_BB_L_dict[tl_ind][7], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+                    AB_norm1 = TM_AB_dict[tl_ind][3].tensordot(env_AB_L_dict[tl_ind][3], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+                    err = (AA_norm[tl_ind] + BB_norm1 - AB_norm1 - AB_norm1.conj()).to_number()/ AA_norm[tl_ind].to_number()
+                    # print(f"step-{step:d} site: {tl_ind}: {err}")
+                    converged = (converged and (np.abs(err - truncate_err[tl_ind]) < threshold))
+                    truncate_err[tl_ind] = err.real
                     site = self.nn_site(site, (-1, 1))
                 site = self.nn_site(site, (1, 1))
 
@@ -380,10 +399,10 @@ class LoopTNR(Peps):
             site = self.nn_site(self.sites()[0], 'b')
             for _ in range(self.dims[0]):
                 for _ in range(self.dims[1]):
-                    site = self.site2index(site)
+                    ind = self.site2index(site)
                     psi_A = self.psiA_mps(site)
-                    psi_A_dict[site] = psi_A
-                    AA_norm_dict[site] = get_norm(TM_psiA_psiA(psi_A))
+                    psi_A_dict[ind] = psi_A
+                    AA_norm_dict[ind] = get_norm(TM_psiA_psiA(psi_A))
                     site = self.nn_site(site, (-1, 1))
                 site = self.nn_site(site, (1, 1))
 
@@ -391,17 +410,20 @@ class LoopTNR(Peps):
             nonlocal overlap
             site = self.nn_site(self.sites()[0], 'b')
             loss = 0.0
+            marked = set()
             for _ in range(self.dims[0]):
                 for _ in range(self.dims[1]):
-                    site = self.site2index(site)
-                    psi_B = self.psiB_mps(site)
-                    AA_norm = AA_norm_dict[site]
-                    AB_norm = get_norm(TM_psiA_psi_B(psi_A_dict[site], psi_B))
-                    BB_norm = get_norm(TM_psiB_psiB(psi_B))
-                    loss += (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real / AA_norm.to_number().real
+                    ind = self.site2index(site)
+                    if ind not in marked: # avoid repeated computations
+                        psi_B = self.psiB_mps(site)
+                        AA_norm = AA_norm_dict[ind]
+                        AB_norm = get_norm(TM_psiA_psi_B(psi_A_dict[ind], psi_B))
+                        BB_norm = get_norm(TM_psiB_psiB(psi_B))
+                        loss += (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real / AA_norm.to_number().real
+                        marked.add(ind)
                     site = self.nn_site(site, (-1, 1))
                 site = self.nn_site(site, (1, 1))
-            overlap = loss
+            overlap = loss/len(marked)
             return loss
 
         def closure():
@@ -423,20 +445,36 @@ class LoopTNR(Peps):
             data.detach_()
         return overlap
 
-    def rg(self, max_sweeps, filter_max_sweeps=1000, filter_threshold=1e-6, loop_threshold=1e-6, mu=1e-8):
+    def rg(self, max_sweeps, method="AD", filter_max_sweeps=1000, filter_threshold=1e-6, loop_threshold=1e-6, mu=1e-8):
         r"""
         Perform the Loop-TNR RG procedure on the PEPS lattice.
+
+        Parameters
+        ----------
+        max_sweeps: int
+            maximum number of sweeps in loop_optimize / maximum number of epochs in loop_optimize_AD
+        method: str
+            "AD" (automatic differentiation) or "ALS" (alternating least squares)
+        filter_threshold: float
+            convergence threshold of entanglement-filtering
+        loop_threshold: float
+            convergence threshold of loop optimizattion
+        mu: float
+            hyper-parameter for the nuclear-norm regularization
         """
-        # for site in self.psi.sites():
-        #     self.entanglement_filtering(site, filter_max_sweeps, conv_check=lambda err_prev, err: abs(err_prev - err) < filter_threshold)
+        if method == "ALS":
+            for site in self.psi.sites():
+                self.entanglement_filtering(site, filter_max_sweeps, conv_check=lambda err_prev, err: abs(err_prev - err) < filter_threshold)
+            # loop compression
+            truncate_err = self.loop_optimize(max_sweeps, loop_threshold)
+            truncate_err = sum(truncate_err.values())/len(truncate_err)
+            self.sync_decomp_T_()
 
-        # loop compression
-        # truncate_err = self.loop_optimize(max_sweeps, loop_threshold)
-        # truncate_err = max(truncate_err.values())
-        # self.sync_decomp_T_()
-
-        self.init_psi_rg(self.D_max)
-        truncate_err = self.loop_optimize_AD(max_sweeps, loop_threshold, mu=mu)
+        elif method == "AD":
+            self.init_psi_rg(self.D_max)
+            truncate_err = self.loop_optimize_AD(max_sweeps, loop_threshold, mu=mu)
+        else:
+            raise Exception(f"method {method} is not implemented!")
 
         # assemble loop MPSs into new PEPS tensors
         site_rg = self.sites()[0]
@@ -449,22 +487,6 @@ class LoopTNR(Peps):
             site_rg = self.nn_site(site_rg, (1, 0))
         return truncate_err
 
-    def sync_decomp_T_(self):
-        site = self.sites()[0]
-        site_rg = self.sites()[0]
-        for _ in range(self.dims[0]):
-            for _ in range(self.dims[1]):
-                tl, tr, bl, br = self.site2index(site), self.site2index(self.nn_site(site, "r")), self.site2index(self.nn_site(site, "b")), self.site2index(self.nn_site(site, "br"))
-                self.psi_rg[site_rg].tl = self.psi_rg[self.site_rg_map[(tl, "br")][1]].tl
-                self.psi_rg[site_rg].tr = self.psi_rg[self.site_rg_map[(tr, "tr")][0]].tr
-                self.psi_rg[site_rg].br = self.psi_rg[self.site_rg_map[(br, "br")][0]].br
-                self.psi_rg[site_rg].bl = self.psi_rg[self.site_rg_map[(bl, "tr")][1]].bl
-
-                site = self.nn_site(site, (-1, 1))
-                site_rg = self.nn_site(site_rg, (0, 1))
-
-            site = self.nn_site(site, (1, 1))
-            site_rg = self.nn_site(site_rg, (1, 0))
 
 
 if __name__ == "__main__":
@@ -474,13 +496,14 @@ if __name__ == "__main__":
     max_sweeps = 100
 
     f_history = []
-    # psi = Ising_dense(beta=beta, h=0.0)
     psi = Ising_Z2_symmetric(beta=beta_c)
     loop_tnr = LoopTNR(psi, D_max)
 
     res = 0
-    for step in range(20):
-        truncate_err = loop_tnr.rg(max_sweeps, filter_max_sweeps=0, loop_threshold=1e-9, mu=1e-6)
+    mu = 0.0
+    method = "ALS"
+    for step in range(25):
+        truncate_err = loop_tnr.rg(max_sweeps, method=method, filter_max_sweeps=int(5e3), loop_threshold=1e-9, mu=mu)
         norm = Ising_post_processing(loop_tnr)
         res += np.log(norm)/2**(step+1)
         print(f"beta={beta_c:.6f}, step-{step:d}: truncation error={truncate_err}, norm={norm}")

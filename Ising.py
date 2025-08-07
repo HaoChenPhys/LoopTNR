@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import yastn.yastn as yastn
 from yastn.yastn.tn.fpeps._peps import Peps
-from yastn.yastn.tn.fpeps._geometry import SquareLattice
+from yastn.yastn.tn.fpeps._geometry import SquareLattice, RectangularUnitcell
 from yastn.yastn.backend import backend_torch
 from yastn.yastn.sym import sym_none, sym_Z2
 
@@ -40,14 +40,12 @@ def Ising_dense(beta, h=0):
     T = yastn.Tensor(config=config, s=(1, 1, -1, -1))
     T.set_block(Ds=(2,2,2,2), val=T_data)
 
-
+    pattern = {(0,0):0, (0,1):1, (1,0):1, (1,1):0}
     tensors={
         (0,0):T,
-        (0,1):T,
-        (1,0):T,
-        (1,1):T
+        (0,1):T
     }
-    return Peps(SquareLattice((2, 2), 'infinite'), tensors=tensors)
+    return Peps(RectangularUnitcell(pattern, 'infinite'), tensors=tensors)
 
 def Ising_Z2_symmetric(beta):
     """
@@ -77,13 +75,13 @@ def Ising_Z2_symmetric(beta):
                 for l in range(2):
                     if (i+j+k+l) % 2 == 0:
                         T.set_block(ts=(i, j, k, l), Ds=(1,1,1,1), val=np.exp(beta*(i+j+k+l-2)))
+
+    pattern = {(0,0):0, (0,1):1, (1,0):1, (1,1):0}
     tensors={
         (0,0):T,
-        (0,1):T,
-        (1,0):T,
-        (1,1):T
+        (0,1):T
     }
-    return Peps(SquareLattice((2, 2), 'infinite'), tensors=tensors)
+    return Peps(RectangularUnitcell(pattern, 'infinite'), tensors=tensors)
 
 def F_exact(beta):
     N = 10000;
