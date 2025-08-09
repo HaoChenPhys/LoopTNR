@@ -10,4 +10,4 @@ It supports
 
 * Alternating least squares optimization of the loop MPS, with entanglement-filtering
 
-* AD-based optimization of the loop MPS, with additional [nuclear-norm regularization](https://arxiv.org/abs/2306.17479)
+<!-- * AD-based optimization of the loop MPS, with additional [nuclear-norm regularization](https://arxiv.org/abs/2306.17479) -->

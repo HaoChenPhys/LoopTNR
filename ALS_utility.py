@@ -100,7 +100,7 @@ def get_proj(L, R):
 def projectors(psi, max_sweeps, conv_check):
     L_list, L_err = find_L(psi, max_sweeps, conv_check)
     R_list, R_err = find_R(psi, max_sweeps, conv_check)
-    # print("Entanglement filtering convergece error: ", L_err, R_err)
+    print("Entanglement filtering convergece error: ", L_err, R_err)
     PLs, PRs = [None]*len(L_list), [None]*len(R_list)
     N = len(L_list)
     for i in range(N):
@@ -139,7 +139,7 @@ def TM_psiB_psiB(psi_Bs, pos=None):
         TM_BB = psi_Bs[pos].tensordot(psi_Bs[pos], axes=(1, 1), conj=(0, 1))
         return TM_BB.transpose(axes=(0, 2, 1, 3))
 
-def TM_psiA_psi_B(psi_As, psi_Bs, pos=None):
+def TM_psiA_psiB(psi_As, psi_Bs, pos=None):
     if pos is None:
         TM_AB = []
         for i in range(len(psi_As)):
@@ -161,13 +161,13 @@ def id_R(T):
     legs = T.get_legs(axes=(2, 3))
     res = yastn.tensordot(yastn.eye(config=T.config, legs=(legs[0].conj(), legs[0]), isdiag=False),\
                            yastn.eye(config=T.config, legs=(legs[1].conj(), legs[1]), isdiag=False), axes=((), ()))
-    return res
+    return res.transpose(axes=(0, 2, 1, 3))
 
 def id_L(T):
     legs = T.get_legs(axes=(0, 1))
     res = yastn.tensordot(yastn.eye(config=T.config, legs=(legs[0], legs[0].conj()), isdiag=False),\
                         yastn.eye(config=T.config, legs=(legs[1], legs[1].conj()), isdiag=False), axes=((), ()))
-    return res
+    return res.transpose(axes=(0, 2, 1, 3))
 
 def env_L_list(TM, start, pos, env_Ls=[]):
     r"""
@@ -179,7 +179,7 @@ def env_L_list(TM, start, pos, env_Ls=[]):
         env_Ls = [None] * len(TM)
         env_Ls[0] = id_L(TM[0])
 
-    for i in range(start, pos):
+    for i in range(start, min(pos, len(TM)-1)):
         res = env_Ls[i].tensordot(TM[i], axes=((2, 3), (0, 1)))
         env_Ls[i+1] = res
 
@@ -195,13 +195,25 @@ def env_R_list(TM, start, pos, env_Rs=[]):
         assert start == len(TM)-1, "Starting position must be len(TM)-1 when env_Rs is empty!"
         env_Rs = [None] * len(TM)
         env_Rs[-1] = id_R(TM[-1])
-    for i in range(start, pos, -1):
+    for i in range(start, max(pos, 0), -1):
         res = TM[i].tensordot(env_Rs[i], axes=((2, 3), (0, 1)))
         env_Rs[i-1] = res
 
     return env_Rs
 
-def NT(env_L, env_R, Bi):
+# def NT(env_L, env_R, Bi):
+#     # compute the action of N on psi_Bs
+#     #   /----------------------\
+#     #   |--\ /---0 1 2----\ /--|
+#     #       L      |       R
+#     #   |--/ \-----Bi-----/ \--|
+#     #   \----------------------/
+
+#     res = env_L.tensordot(Bi, axes=(2, 0))
+#     res = res.tensordot(env_R, axes=((0, 1, 4), (2, 3, 0)))
+#     return res
+
+def NT(env_LR, Bi):
     # compute the action of N on psi_Bs
     #   /----------------------\
     #   |--\ /---0 1 2----\ /--|
@@ -209,11 +221,39 @@ def NT(env_L, env_R, Bi):
     #   |--/ \-----Bi-----/ \--|
     #   \----------------------/
 
-    res = env_L.tensordot(Bi, axes=(2, 0))
-    res = res.tensordot(env_R, axes=((0, 1, 4), (2, 3, 0)))
-    return res
+    res = env_LR.tensordot(Bi, axes=((0, 2), (0, 2)))
+    return res.transpose(axes=(0, 2, 1))
 
-def W(pos, env_L, env_R, psi_As, psi_Bs):
+# def W(pos, env_L, env_R, psi_As, psi_Bs):
+#     # pos: position of the B tensor in the 8-site MPS
+#     # compute W tensor:
+
+#     # odd positions:
+#     #   /-----------------------------\
+#     #   |--\ /--B_{i-1}-0 1 2----\ /--|
+#     #       L        \   /        R
+#     #   |--/ \--------A_{i//2}---/ \--|
+#     #   \-----------------------------/
+
+#     # even positions:
+#     #   /------------------------------\
+#     #   |--\ /---0 1 2-B_{i+1}----\ /--|
+#     #       L       \    /         R
+#     #   |--/ \--------A_{i//2}----/ \--|
+#     #   \------------------------------/
+
+#     if pos % 2 == 1:
+#         res = env_L.tensordot(psi_Bs[pos-1], axes=(3, 0), conj=(0, 1))
+#         res = res.tensordot(psi_As[pos//2], axes=((2, 3), (0, 1)))
+#         res = res.tensordot(env_R, axes=((0, 1, 4), (2, 3, 0)))
+#     else:
+#         res = psi_Bs[pos+1].tensordot(env_R, axes=(2, 1), conj=(1, 0))
+#         res = psi_As[pos//2].tensordot(res, axes=((2, 3), (1, 2)))
+#         res = env_L.tensordot(res, axes=((0, 1, 2), (3, 4, 0)))
+
+#     return res
+
+def W(pos, env_LR, psi_As, psi_Bs):
     # pos: position of the B tensor in the 8-site MPS
     # compute W tensor:
 
@@ -232,13 +272,13 @@ def W(pos, env_L, env_R, psi_As, psi_Bs):
     #   \------------------------------/
 
     if pos % 2 == 1:
-        res = env_L.tensordot(psi_Bs[pos-1], axes=(3, 0), conj=(0, 1))
-        res = res.tensordot(psi_As[pos//2], axes=((2, 3), (0, 1)))
-        res = res.tensordot(env_R, axes=((0, 1, 4), (2, 3, 0)))
+        res = env_LR.tensordot(psi_Bs[pos-1], axes=(1, 0), conj=(0, 1))
+        res = res.tensordot(psi_As[pos//2], axes=((0, 1, 3), (0, 3, 1)))
+        res = res.transpose(axes=(1, 2, 0))
     else:
-        res = psi_Bs[pos+1].tensordot(env_R, axes=(2, 1), conj=(1, 0))
-        res = psi_As[pos//2].tensordot(res, axes=((2, 3), (1, 2)))
-        res = env_L.tensordot(res, axes=((0, 1, 2), (3, 4, 0)))
+        res = env_LR.tensordot(psi_Bs[pos+1], axes=(3, 2), conj=(0, 1))
+        res = res.tensordot(psi_As[pos//2], axes=((0, 2, 4), (0, 3, 2)))
+        res = res.transpose(axes=(0, 2, 1))
 
     return res
 
@@ -260,11 +300,198 @@ def solve_T(NT, W, T0):
         return to_numpy(res_data)
     v0 = to_numpy(v0)
 
-    A = LinearOperator((v0.size, v0.size), matvec=mv)
-    sol, info = cg(A, to_numpy(W_data), x0=v0)
+    A = LinearOperator((v0.size, v0.size), matvec=mv, rmatvec=mv)
+    sol, info = cg(A, to_numpy(W_data), x0=v0, rtol=1e-8, maxiter=int(1e6))
+    # print("np diff", np.linalg.norm(A@sol-to_numpy(W_data)))
     if info != 0:
         print(f"info={info}")
     return decompress_from_1d(to_tensor(sol), meta_T)
+
+def min_diff_indep(psiA, psiB, max_sweeps=100, threshold=1e-9):
+    TM_BB = TM_psiB_psiB(psiB)
+    TM_AB = TM_psiA_psiB(psiA, psiB)
+
+    env_BB_Rs = env_R_list(TM_BB, start=len(TM_BB)-1, pos=0)
+    env_AB_Rs = env_R_list(TM_AB, start=len(TM_AB)-1, pos=0)
+    env_BB_Ls, env_AB_Ls = [None]*len(TM_BB), [None]*len(TM_AB)
+    env_BB_Ls[0], env_AB_Ls[0] = id_L(TM_BB[0]), id_L(TM_AB[0])
+
+    AA_norm = get_norm(TM_psiA_psiA(psiA))
+    prev_err = 0
+    for step in range(max_sweeps):
+        # left to right
+        for pos in range(len(psiB)-1):
+            env_AB_LR = yastn.tensordot(env_AB_Ls[pos//2], env_AB_Rs[pos//2], axes=((0, 1), (2, 3)))
+            W1 = W(pos, env_AB_LR, psiA, psiB)
+            env_BB_LR = yastn.tensordot(env_BB_Ls[pos], env_BB_Rs[pos], axes=((0, 1), (2, 3)))
+
+            # solve the linear system for T
+            psiB[pos] = solve_T(lambda Bi: NT(env_BB_LR, Bi), W1, psiB[pos])
+
+            # update
+            TM_BB[pos] = TM_psiB_psiB(psiB, pos=pos)
+            env_BB_Ls = env_L_list(TM_BB, pos, pos+1, env_BB_Ls)
+
+            if pos % 2 == 1:
+                TM_AB[pos//2] = TM_psiA_psiB(psiA, psiB, pos=pos//2)
+                env_AB_Ls = env_L_list(TM_AB, start=pos//2, pos=pos//2+1, env_Ls=env_AB_Ls)
+
+        BB_norm = TM_BB[7].tensordot(env_BB_Ls[7], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        AB_norm = TM_AB[3].tensordot(env_AB_Ls[3], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        err = (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real/AA_norm.to_number().real
+        print(f"iter-{step:d} left->right, err={err}")
+        if abs(prev_err-err) < threshold:
+            break
+        prev_err = err
+
+        # right to left
+        for pos in range(len(psiB)-1, 0, -1):
+            env_AB_LR = yastn.tensordot(env_AB_Ls[pos//2], env_AB_Rs[pos//2], axes=((0, 1), (2, 3)))
+            W1 = W(pos, env_AB_LR, psiA, psiB)
+            env_BB_LR = yastn.tensordot(env_BB_Ls[pos], env_BB_Rs[pos], axes=((0, 1), (2, 3)))
+
+            # solve the linear system for T
+            psiB[pos] = solve_T(lambda Bi: NT(env_BB_LR, Bi), W1, psiB[pos])
+
+            # update
+            TM_BB[pos] = TM_psiB_psiB(psiB, pos=pos)
+            env_BB_Rs = env_R_list(TM_BB, pos, pos-1, env_BB_Rs)
+
+            if pos % 2 == 0:
+                TM_AB[pos//2] = TM_psiA_psiB(psiA, psiB, pos=pos//2)
+                env_AB_Rs = env_R_list(TM_AB, start=pos//2, pos=pos//2-1, env_Rs=env_AB_Rs)
+
+        BB_norm = TM_BB[0].tensordot(env_BB_Rs[0], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        AB_norm = TM_AB[0].tensordot(env_AB_Rs[0], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        err = (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real/AA_norm.to_number().real
+        if abs(prev_err-err) < threshold:
+            break
+        prev_err = err
+        print(f"iter-{step:d} right->left, err={err}")
+
+    return psiB, err
+
+def min_diff_dep(psiA, psiB, same_T, max_sweeps=100, threshold=1e-9):
+    TM_BB = TM_psiB_psiB(psiB)
+    TM_AB = TM_psiA_psiB(psiA, psiB)
+
+    env_BB_Rs = env_R_list(TM_BB, start=len(TM_BB)-1, pos=0)
+    env_AB_Rs = env_R_list(TM_AB, start=len(TM_AB)-1, pos=0)
+    env_BB_Ls, env_AB_Ls = [None]*len(TM_BB), [None]*len(TM_AB)
+    env_BB_Ls[0], env_AB_Ls[0] = id_L(TM_BB[0]), id_L(TM_AB[0])
+
+    AA_norm = get_norm(TM_psiA_psiA(psiA))
+    prev_err = 0
+    for step in range(max_sweeps):
+        # left to right
+        for pos in range(len(psiB)-1):
+            env_AB_LR1 = yastn.tensordot(env_AB_Ls[pos//2], env_AB_Rs[pos//2], axes=((0, 1), (2, 3)))
+            W1 = W(pos, env_AB_LR1, psiA, psiB)
+            env_BB_LR1 = yastn.tensordot(env_BB_Ls[pos], env_BB_Rs[pos], axes=((0, 1), (2, 3)))
+
+            if pos in same_T:
+                pos2 = same_T[pos][0]
+                env_AB_Ls = env_L_list(TM_AB, start=pos//2, pos=pos2//2, env_Ls=env_AB_Ls)
+                env_BB_Ls = env_L_list(TM_BB, start=pos, pos=pos2, env_Ls=env_BB_Ls)
+                env_AB_Rs = env_R_list(TM_AB, start=pos//2, pos=pos2//2, env_Rs=env_AB_Rs)
+                env_BB_Rs = env_R_list(TM_BB, start=pos, pos=pos2, env_Rs=env_BB_Rs)
+                env_AB_LR2 = yastn.tensordot(env_AB_Ls[pos2//2], env_AB_Rs[pos2//2], axes=((0, 1), (2, 3)))
+                W2 = W(pos2, env_AB_LR2, psiA, psiB)
+                env_BB_LR2 = yastn.tensordot(env_BB_Ls[pos2], env_BB_Rs[pos2], axes=((0, 1), (2, 3)))
+                T1_to_T2, T2_to_T1 = same_T[pos2][1], same_T[pos][1]
+                def N12(Bi):
+                    N1 = NT(env_BB_LR1, Bi)
+                    N2 = NT(env_BB_LR2, Bi.transpose(axes=T1_to_T2)).transpose(axes=T2_to_T1)
+                    return N1+N2
+                psiB[pos] = solve_T(N12, W1+W2.transpose(axes=T2_to_T1), psiB[pos])
+                psiB[pos2] =psiB[pos].transpose(axes=T1_to_T2)
+
+                # update
+                TM_BB[pos] = TM_psiB_psiB(psiB, pos=pos)
+                TM_BB[pos2] = TM_psiB_psiB(psiB, pos=pos2)
+                min_pos, max_pos = min(pos, pos2), max(pos, pos2)
+                env_BB_Ls = env_L_list(TM_BB, min_pos, max_pos+1, env_BB_Ls)
+                env_BB_Rs = env_R_list(TM_BB, max_pos, min_pos-1, env_BB_Rs)
+                TM_AB[pos//2] = TM_psiA_psiB(psiA, psiB, pos=pos//2)
+                TM_AB[pos2//2] = TM_psiA_psiB(psiA, psiB, pos=pos2//2)
+                env_AB_Ls = env_L_list(TM_AB, start=min_pos//2, pos=max_pos//2+1, env_Ls=env_AB_Ls)
+                env_AB_Rs = env_R_list(TM_AB, start=max_pos//2, pos=min_pos//2-1, env_Rs=env_AB_Rs)
+
+            else:
+                # solve the linear system for T
+                psiB[pos] = solve_T(lambda Bi: NT(env_BB_LR1, Bi), W1, psiB[pos])
+
+                # update
+                TM_BB[pos] = TM_psiB_psiB(psiB, pos=pos)
+                env_BB_Ls = env_L_list(TM_BB, pos, pos+1, env_BB_Ls)
+
+                if pos % 2 == 1:
+                    TM_AB[pos//2] = TM_psiA_psiB(psiA, psiB, pos=pos//2)
+                    env_AB_Ls = env_L_list(TM_AB, start=pos//2, pos=pos//2+1, env_Ls=env_AB_Ls)
+
+        BB_norm = TM_BB[7].tensordot(env_BB_Ls[7], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        AB_norm = TM_AB[3].tensordot(env_AB_Ls[3], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        err = (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real/AA_norm.to_number().real
+        print(f"iter-{step:d} left->right, err={err}")
+        if abs(prev_err-err) < threshold:
+            break
+        prev_err = err
+
+        # right to left
+        for pos in range(len(psiB)-1, 0, -1):
+            env_AB_LR1 = yastn.tensordot(env_AB_Ls[pos//2], env_AB_Rs[pos//2], axes=((0, 1), (2, 3)))
+            W1 = W(pos, env_AB_LR1, psiA, psiB)
+            env_BB_LR1 = yastn.tensordot(env_BB_Ls[pos], env_BB_Rs[pos], axes=((0, 1), (2, 3)))
+
+            if pos in same_T:
+                pos2 = same_T[pos][0]
+                env_AB_Ls = env_L_list(TM_AB, start=pos//2, pos=pos2//2, env_Ls=env_AB_Ls)
+                env_BB_Ls = env_L_list(TM_BB, start=pos, pos=pos2, env_Ls=env_BB_Ls)
+                env_AB_Rs = env_R_list(TM_AB, start=pos//2, pos=pos2//2, env_Rs=env_AB_Rs)
+                env_BB_Rs = env_R_list(TM_BB, start=pos, pos=pos2, env_Rs=env_BB_Rs)
+                env_AB_LR2 = yastn.tensordot(env_AB_Ls[pos2//2], env_AB_Rs[pos2//2], axes=((0, 1), (2, 3)))
+                W2 = W(pos2, env_AB_LR2, psiA, psiB)
+                env_BB_LR2 = yastn.tensordot(env_BB_Ls[pos2], env_BB_Rs[pos2], axes=((0, 1), (2, 3)))
+                T1_to_T2, T2_to_T1 = same_T[pos2][1], same_T[pos][1]
+                def N12(Bi):
+                    N1 = NT(env_BB_LR1, Bi)
+                    N2 = NT(env_BB_LR2, Bi.transpose(axes=T1_to_T2)).transpose(axes=T2_to_T1)
+                    return N1+N2
+                psiB[pos] = solve_T(N12, W1+W2.transpose(axes=T2_to_T1), psiB[pos])
+                psiB[pos2] =psiB[pos].transpose(axes=T1_to_T2)
+
+                # update
+                TM_BB[pos] = TM_psiB_psiB(psiB, pos=pos)
+                TM_BB[pos2] = TM_psiB_psiB(psiB, pos=pos2)
+                min_pos, max_pos = min(pos, pos2), max(pos, pos2)
+                env_BB_Ls = env_L_list(TM_BB, min_pos, max_pos+1, env_BB_Ls)
+                env_BB_Rs = env_R_list(TM_BB, max_pos, min_pos-1, env_BB_Rs)
+                TM_AB[pos//2] = TM_psiA_psiB(psiA, psiB, pos=pos//2)
+                TM_AB[pos2//2] = TM_psiA_psiB(psiA, psiB, pos=pos2//2)
+                env_AB_Ls = env_L_list(TM_AB, start=min_pos//2, pos=max_pos//2+1, env_Ls=env_AB_Ls)
+                env_AB_Rs = env_R_list(TM_AB, start=max_pos//2, pos=min_pos//2-1, env_Rs=env_AB_Rs)
+
+            else:
+                # solve the linear system for T
+                psiB[pos] = solve_T(lambda Bi: NT(env_BB_LR1, Bi), W1, psiB[pos])
+
+                # update
+                TM_BB[pos] = TM_psiB_psiB(psiB, pos=pos)
+                env_BB_Ls = env_R_list(TM_BB, pos, pos-1, env_BB_Ls)
+
+                if pos % 2 == 0:
+                    TM_AB[pos//2] = TM_psiA_psiB(psiA, psiB, pos=pos//2)
+                    env_AB_Rs = env_R_list(TM_AB, start=pos//2, pos=pos//2-1, env_Rs=env_AB_Rs)
+
+        BB_norm = TM_BB[0].tensordot(env_BB_Rs[0], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        AB_norm = TM_AB[0].tensordot(env_AB_Rs[0], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
+        err = (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real/AA_norm.to_number().real
+        if abs(prev_err-err) < threshold:
+            break
+        prev_err = err
+        print(f"iter-{step:d} right->left, err={err}")
+
+    return psiB, err
 
 def get_norm(TM):
     res = id_L(TM[0])

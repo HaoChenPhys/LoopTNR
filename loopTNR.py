@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-from torch.optim import LBFGS
+# from torch.optim import LBFGS
+# from torchmin import minimize, Minimizer
 
 import logging, argparse, pickle
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from yastn.yastn.tn.fpeps._peps import Peps, Peps2Layers
 from Ising import *
 from ALS_utility import *
 
+torch.set_printoptions(precision=16)
 @dataclass()
 class Ent_projectors():
     r""" Dataclass for entanglement-filtering projectors associated with Peps lattice site. """
@@ -235,7 +237,7 @@ class LoopTNR(Peps):
                 ]
         return psi_As
 
-    def psiB_mps(self, site_tl):
+    def psiB_mps(self, site_tl, get_dict=False):
         '''
         Construct the periodic 8-site MPS (clockwisely) from the square lattice network.
 
@@ -252,7 +254,9 @@ class LoopTNR(Peps):
         if (self.site2index(site_tl), "tr") not in self.site_rg_map:
             return None
 
+
         psi_Bs = [None] * 8
+        same_T = {}
         site_tr, site_bl, site_br = self.nn_site(site_tl, "r"), self.nn_site(site_tl, "b"), self.nn_site(site_tl, "br")
         site_rg1, site_rg2 = self.site_rg_map[(self.site2index(site_tl), "tr")]
         psi_Bs[0] = self.psi_rg[site_rg1].tr.transpose(axes=self.decomp_T_to_B[0])
@@ -267,7 +271,47 @@ class LoopTNR(Peps):
         psi_Bs[6] = self.psi_rg[site_rg2].tl.transpose(axes=self.decomp_T_to_B[6])
         psi_Bs[7] = self.psi_rg[site_rg1].br.transpose(axes=self.decomp_T_to_B[7])
 
+        if get_dict:
+            if self.site2index(site_br) == self.site2index(site_tl):
+                same_T[0], same_T[5] = (5, (1, 2, 0)), (0, (2, 0, 1))
+                same_T[1], same_T[4] = (4, (2, 0, 1)), (1, (1, 2, 0))
+
+            if self.site2index(site_bl) == self.site2index(site_tr):
+                same_T[2], same_T[7] = (7, (1, 2, 0)), (2, (2, 0, 1))
+                same_T[3], same_T[6] = (6, (2, 0, 1)), (3, (1, 2, 0))
+
+            return psi_Bs, same_T
         return psi_Bs
+
+    def update_T_from_psiB(self, psi_B, site_tl):
+        '''
+        Update the decomposed tensors according to the periodic 8-site MPS (clockwisely).
+
+                     |     |
+                     T1----T2
+                    /       \                       1
+                ---T0        T3---                  |
+                   |         |          ,       0---Ti---2
+                ---T7        T4---
+                    \       /
+                     T6----T5
+                     |     |
+        '''
+        site_tr, site_bl, site_br = self.nn_site(site_tl, "r"), self.nn_site(site_tl, "b"), self.nn_site(site_tl, "br")
+        site_rg1, site_rg2 = self.site_rg_map[(self.site2index(site_tl), "tr")]
+        self.psi_rg[site_rg1].tr = psi_B[0].transpose(axes=self.B_to_decomp_T[0])
+        self.psi_rg[site_rg2].bl = psi_B[1].transpose(axes=self.B_to_decomp_T[1])
+        site_rg1, site_rg2 = self.site_rg_map[(self.site2index(site_tr), "br")]
+        self.psi_rg[site_rg1].br = psi_B[2].transpose(axes=self.B_to_decomp_T[2])
+        self.psi_rg[site_rg2].tl = psi_B[3].transpose(axes=self.B_to_decomp_T[3])
+        site_rg1, site_rg2 = self.site_rg_map[(self.site2index(site_br), "tr")]
+        self.psi_rg[site_rg2].bl = psi_B[4].transpose(axes=self.B_to_decomp_T[4])
+        self.psi_rg[site_rg1].tr = psi_B[5].transpose(axes=self.B_to_decomp_T[5])
+        site_rg1, site_rg2 = self.site_rg_map[(self.site2index(site_bl), "br")]
+        self.psi_rg[site_rg2].tl = psi_B[6].transpose(axes=self.B_to_decomp_T[6])
+        self.psi_rg[site_rg1].br = psi_B[7].transpose(axes=self.B_to_decomp_T[7])
+
+        self.sync_decomp_T_()
 
     @torch.no_grad()
     def loop_optimize(self, max_sweeps, threshold=1e-6):
@@ -276,175 +320,36 @@ class LoopTNR(Peps):
         """
         # initialization
         self.init_psi_rg(self.D_max)
-        psi_A_dict, psi_B_dict = {}, {}
-        TM_AB_dict, TM_BB_dict = {}, {}
-        env_AB_L_dict, env_AB_R_dict = {}, {}
-        env_BB_L_dict, env_BB_R_dict = {}, {}
-        env_L_start, env_R_start = {}, {}
-        AA_norm, truncate_err = {}, {}
+        marked = set()
+        truncate_err = 0
 
+        # loop over plaquettes (not rg lattice sites)
         # Due to the choice of init_psi_rg, the starting site of the loop is shifted.
         site = self.nn_site(self.sites()[0], 'b')
         for _ in range(self.dims[0]):
             for _ in range(self.dims[1]):
-                ind = self.site2index(site)
-                psi_A_dict[ind] = self.psiA_mps(site)
-                psi_B_dict[ind] = self.psiB_mps(site)
-                AA_norm[ind] = get_norm(TM_psiA_psiA(psi_A_dict[ind]))
-                TM_AB_dict[ind] = TM_psiA_psi_B(psi_A_dict[ind], psi_B_dict[ind])
-                TM_BB_dict[ind] = TM_psiB_psiB(psi_B_dict[ind])
-                env_AB_L_dict[ind], env_AB_R_dict[ind] = [], []
-                env_BB_L_dict[ind], env_BB_R_dict[ind] = [], []
-                env_L_start[ind], env_R_start[ind] = 0, 7
-                truncate_err[ind] = np.inf
-                site = self.nn_site(site, (-1, 1))
-            site = self.nn_site(site, (1, 1))
+                ind = self.psi.site2index(site)
+                if ind not in marked:
+                    psiA = self.psiA_mps(site)
+                    psiB, same_T = self.psiB_mps(site, get_dict=True)
+                    if len(same_T) == 0:
+                        # mps tensors are independent
+                        psiB, err = min_diff_indep(psiA, psiB, max_sweeps=max_sweeps, threshold=threshold)
+                    else:
+                        # mps tensors are dependent; performance is worse than the independent case
+                        psiB, err = min_diff_dep(psiA, psiB, same_T, max_sweeps=max_sweeps, threshold=threshold)
 
-        drs = [(-1, -1), (-1, 0), (0, 0), (0, -1)] # vectors pointing to the the top-left corner of the edge-sharing plaquettes
-        sp_optim_pos = [(5, 4), (7, 6), (1, 0), (3, 2)] # indices of the optimized sites in the edge-sharing psi_Bs
+                    truncate_err = max(err, truncate_err)
+                    print(f"plaquette-{site}({ind}): {err}")
 
-        for step in range(max_sweeps):
-            converged = True
-            # loop over plaquettes (not rg lattice sites)
-            site = self.nn_site(self.sites()[0], 'b')
-            for _ in range(self.dims[0]):
-                for _ in range(self.dims[1]):
-                    loop_sites = site, self.nn_site(site, "r"), self.nn_site(site, "br"), self.nn_site(site, "b")
+                    # update T, TM, env_start
+                    self.update_T_from_psiB(psiB, site)
+                    marked.add(ind)
 
-                    tl_ind = self.site2index(loop_sites[0])
-                    psi_A1, psi_B1 = psi_A_dict[tl_ind], psi_B_dict[tl_ind]
-                    B1_pos = 0
-                    for i, s in enumerate(loop_sites):
-                        dr = drs[i]
-                        optim_pos = sp_optim_pos[i]
-                        sp_ind = self.site2index(self.nn_site(s, dr))
-                        psi_A2, psi_B2 = psi_A_dict[sp_ind], psi_B_dict[sp_ind]
-                        for j, B2_pos in enumerate(optim_pos):
-                            env_AB_L_dict[tl_ind] = env_L_list(TM_AB_dict[tl_ind], env_L_start[tl_ind]//2, B1_pos//2, env_Ls=env_AB_L_dict[tl_ind])
-                            env_AB_R_dict[tl_ind] = env_R_list(TM_AB_dict[tl_ind], env_R_start[tl_ind]//2, B1_pos//2, env_Rs=env_AB_R_dict[tl_ind])
-                            env_BB_L_dict[tl_ind] = env_L_list(TM_BB_dict[tl_ind], env_L_start[tl_ind], B1_pos, env_Ls=env_BB_L_dict[tl_ind])
-                            env_BB_R_dict[tl_ind] = env_R_list(TM_BB_dict[tl_ind], env_R_start[tl_ind], B1_pos, env_Rs=env_BB_R_dict[tl_ind])
-                            W1 = W(B1_pos, env_AB_L_dict[tl_ind][B1_pos//2], env_AB_R_dict[tl_ind][B1_pos//2], psi_A1, psi_B1).transpose(self.B_to_decomp_T[B1_pos])
-                            env_L_start[tl_ind], env_R_start[tl_ind] = max(B1_pos, env_L_start[tl_ind]), min(B1_pos, env_R_start[tl_ind])
-
-                            env_AB_L_dict[sp_ind] = env_L_list(TM_AB_dict[sp_ind], env_L_start[sp_ind]//2, B2_pos//2, env_Ls=env_AB_L_dict[sp_ind])
-                            env_AB_R_dict[sp_ind] = env_R_list(TM_AB_dict[sp_ind], env_R_start[sp_ind]//2, B2_pos//2, env_Rs=env_AB_R_dict[sp_ind])
-                            env_BB_L_dict[sp_ind] = env_L_list(TM_BB_dict[sp_ind], env_L_start[sp_ind], B2_pos, env_Ls=env_BB_L_dict[sp_ind])
-                            env_BB_R_dict[sp_ind] = env_R_list(TM_BB_dict[sp_ind], env_R_start[sp_ind], B2_pos, env_Rs=env_BB_R_dict[sp_ind])
-
-                            W2 = W(B2_pos, env_AB_L_dict[sp_ind][B2_pos//2], env_AB_R_dict[sp_ind][B2_pos//2], psi_A2, psi_B2).transpose(self.B_to_decomp_T[B2_pos])
-                            env_L_start[sp_ind], env_R_start[sp_ind] = max(B2_pos, env_L_start[sp_ind]), max(B2_pos, env_R_start[sp_ind])
-
-                            def N12(T):
-                                NT1 = NT(env_BB_L_dict[tl_ind][B1_pos], env_BB_R_dict[tl_ind][B1_pos], T.transpose(self.decomp_T_to_B[B1_pos])).transpose(self.B_to_decomp_T[B1_pos])
-                                NT2 = NT(env_BB_L_dict[sp_ind][B2_pos], env_BB_R_dict[sp_ind][B2_pos], T.transpose(self.decomp_T_to_B[B2_pos])).transpose(self.B_to_decomp_T[B2_pos])
-                                return NT1+NT2
-
-                            # solve the linear system for T
-                            dirn = "tr" if i % 2 == 0 else "br"
-                            s_ind = self.site2index(s)
-                            site_rg = self.site_rg_map[(s_ind, dirn)][j] if B1_pos <= 3 else self.site_rg_map[(s_ind, dirn)][1-j]
-                            T0 = getattr(self.psi_rg[site_rg], self.Bpos_to_dirn[B1_pos])
-                            T = solve_T(N12, W1+W2, T0)
-
-                            # update T, TM, env_start
-                            setattr(self.psi_rg[site_rg], self.Bpos_to_dirn[B1_pos], T)
-                            psi_B1[B1_pos] = T.transpose(self.decomp_T_to_B[B1_pos])
-                            psi_B2[B2_pos] = T.transpose(self.decomp_T_to_B[B2_pos])
-                            TM_AB_dict[tl_ind][B1_pos//2] = TM_psiA_psi_B(psi_A1, psi_B1, pos=B1_pos//2)
-                            TM_BB_dict[tl_ind][B1_pos] = TM_psiB_psiB(psi_B1, pos=B1_pos)
-                            TM_AB_dict[sp_ind][B2_pos//2] = TM_psiA_psi_B(psi_A2, psi_B2, pos=B2_pos//2)
-                            TM_BB_dict[sp_ind][B2_pos] = TM_psiB_psiB(psi_B2, pos=B2_pos)
-                            env_L_start[tl_ind], env_R_start[tl_ind] = min(B1_pos, env_L_start[tl_ind]), max(B1_pos, env_R_start[tl_ind])
-                            env_L_start[sp_ind], env_R_start[sp_ind] = min(B2_pos, env_L_start[sp_ind]), max(B2_pos, env_R_start[sp_ind])
-                            B1_pos += 1
-
-                    BB_norm1 = TM_BB_dict[tl_ind][7].tensordot(env_BB_L_dict[tl_ind][7], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
-                    AB_norm1 = TM_AB_dict[tl_ind][3].tensordot(env_AB_L_dict[tl_ind][3], axes=((0, 1, 2, 3), (2, 3, 0, 1)))
-                    err = (AA_norm[tl_ind] + BB_norm1 - AB_norm1 - AB_norm1.conj()).to_number()/ AA_norm[tl_ind].to_number()
-                    # print(f"step-{step:d} site: {tl_ind}: {err}")
-                    converged = (converged and (np.abs(err - truncate_err[tl_ind]) < threshold))
-                    truncate_err[tl_ind] = err.real
-                    site = self.nn_site(site, (-1, 1))
-                site = self.nn_site(site, (1, 1))
-
-            if converged:
-                break
+                site = self.nn_site(site, (0, 2)) # important
+            site = self.nn_site(site, (2, 0)) # important
 
         return truncate_err
-
-    def nuclear_norm_loss(self):
-        loss = 0.0
-        cnt = 0
-        for T in self.indep_decomp_T():
-            loss += nuclear_norm(T.fuse_legs(axes=(0, (1, 2))))
-            + nuclear_norm(T.fuse_legs(axes=(1, (2, 0))))
-            + nuclear_norm(T.fuse_legs(axes=(2, (0, 1))))
-            cnt += 3
-        return loss/cnt
-
-    def loop_optimize_AD(self, epochs, loop_threshold, mu=0.0):
-        """
-        Perform AD optimization to compress the periodic mps.
-        mu is the hyper-parameter for nuclear-norm regularization.
-        """
-        data_list = self.get_decomp_T_data()
-        for data in data_list: data.requires_grad_(True)
-        optimizer = LBFGS(data_list,lr=1.0, max_iter=20, history_size=25, line_search_fn='strong_wolfe')
-
-        psi_A_dict, AA_norm_dict = {}, {}
-        overlap = 0.0
-
-        def init():
-            nonlocal psi_A_dict, AA_norm_dict
-            site = self.nn_site(self.sites()[0], 'b')
-            for _ in range(self.dims[0]):
-                for _ in range(self.dims[1]):
-                    ind = self.site2index(site)
-                    psi_A = self.psiA_mps(site)
-                    psi_A_dict[ind] = psi_A
-                    AA_norm_dict[ind] = get_norm(TM_psiA_psiA(psi_A))
-                    site = self.nn_site(site, (-1, 1))
-                site = self.nn_site(site, (1, 1))
-
-        def overlap_loss():
-            nonlocal overlap
-            site = self.nn_site(self.sites()[0], 'b')
-            loss = 0.0
-            marked = set()
-            for _ in range(self.dims[0]):
-                for _ in range(self.dims[1]):
-                    ind = self.site2index(site)
-                    if ind not in marked: # avoid repeated computations
-                        psi_B = self.psiB_mps(site)
-                        AA_norm = AA_norm_dict[ind]
-                        AB_norm = get_norm(TM_psiA_psi_B(psi_A_dict[ind], psi_B))
-                        BB_norm = get_norm(TM_psiB_psiB(psi_B))
-                        loss += (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real / AA_norm.to_number().real
-                        marked.add(ind)
-                    site = self.nn_site(site, (-1, 1))
-                site = self.nn_site(site, (1, 1))
-            overlap = loss/len(marked)
-            return loss
-
-        def closure():
-            optimizer.zero_grad()
-            loss = overlap_loss() + mu*self.nuclear_norm_loss()
-            loss.backward()
-            return loss
-
-        init()
-        loss_history = [torch.inf]
-        for epoch in range(1, epochs+1):
-            loss = optimizer.step(closure)
-            # print(f"epoch-{epoch:d}: loss={loss}")
-            if torch.isclose(loss, torch.zeros(1, dtype=loss.dtype)) or torch.abs(loss - loss_history[-1])/torch.abs(loss) < loop_threshold:
-                break
-            loss_history.append(loss)
-
-        for data in data_list:
-            data.detach_()
-        return overlap
 
     def rg(self, max_sweeps, method="AD", filter_max_sweeps=1000, filter_threshold=1e-6, loop_threshold=1e-6, mu=1e-8):
         r"""
@@ -464,20 +369,20 @@ class LoopTNR(Peps):
             hyper-parameter for the nuclear-norm regularization
         """
         if method == "ALS":
-            # marked = set()
-            # for site in self.psi.sites():
-            #     ind = self.psi.site2index(site)
-            #     if ind not in marked:
-            #         self.entanglement_filtering(site, filter_max_sweeps, conv_check=lambda err_prev, err: abs(err_prev - err) < filter_threshold)
-            #         marked.add(ind)
-            # loop compression
+            # ----entanglement-filtering----
+            marked = set()
+            for site in self.psi.sites():
+                ind = self.psi.site2index(site)
+                if ind not in marked:
+                    self.entanglement_filtering(site, filter_max_sweeps, conv_check=lambda err_prev, err: abs(err_prev - err) < filter_threshold)
+                    marked.add(ind)
+            # ----loop compression----
             truncate_err = self.loop_optimize(max_sweeps, loop_threshold)
-            truncate_err = sum(truncate_err.values())/len(truncate_err)
             self.sync_decomp_T_()
 
-        elif method == "AD":
-            self.init_psi_rg(self.D_max)
-            truncate_err = self.loop_optimize_AD(max_sweeps, loop_threshold, mu=mu)
+        # elif method == "AD":
+        #     self.init_psi_rg(self.D_max)
+        #     truncate_err = self.loop_optimize_AD(max_sweeps, loop_threshold, mu=mu)
         else:
             raise Exception(f"method {method} is not implemented!")
 
@@ -492,6 +397,181 @@ class LoopTNR(Peps):
             site_rg = self.nn_site(site_rg, (1, 0))
         return truncate_err
 
+    # def nuclear_norm_loss(self):
+    #     loss = 0.0
+    #     cnt = 0
+    #     for T in self.indep_decomp_T():
+    #         loss += nuclear_norm(T.fuse_legs(axes=(0, (1, 2))))
+    #         + nuclear_norm(T.fuse_legs(axes=(1, (2, 0))))
+    #         + nuclear_norm(T.fuse_legs(axes=(2, (0, 1))))
+    #         cnt += 3
+    #     return loss/cnt
+
+    # def loop_optimize_AD(self, epochs, loop_threshold, mu=0.0):
+    #     """
+    #     Perform AD optimization to compress the periodic mps.
+    #     mu is the hyper-parameter for nuclear-norm regularization.
+    #     """
+    #     data_list = self.get_decomp_T_data()
+    #     for data in data_list: data.requires_grad_(True)
+    #     # optimizer = LBFGS(data_list,lr=1.0, max_iter=50, history_size=100,
+    #     #                   tolerance_grad=1e-12, tolerance_change=1e-12, line_search_fn="strong_wolfe")
+    #     # optimizer = LBFGS(data_list,lr=1.0, max_iter=50, history_size=100,
+    #     #                   tolerance_grad=1e-12, tolerance_change=1e-12, line_search_fn="strong_wolfe")
+    #     optimizer = Minimizer(data_list, method='newton-cg', options=dict(xtol=1e-8, max_iter=20))
+
+    #     psi_A_dict, AA_norm_dict = {}, {}
+    #     diff = 0
+
+    #     def init():
+    #         nonlocal psi_A_dict, AA_norm_dict
+    #         site = self.nn_site(self.sites()[0], 'b')
+    #         for _ in range(self.dims[0]):
+    #             for _ in range(self.dims[1]):
+    #                 ind = self.site2index(site)
+    #                 psi_A = self.psiA_mps(site)
+    #                 psi_A_dict[ind] = psi_A
+    #                 AA_norm_dict[ind] = get_norm(TM_psiA_psiA(psi_A))
+    #                 site = self.nn_site(site, (-1, 1))
+    #             site = self.nn_site(site, (1, 1))
+
+    #     def diff_loss():
+    #         nonlocal diff
+    #         site = self.nn_site(self.sites()[0], 'b')
+    #         loss = 0.0
+    #         marked = set()
+    #         torch.set_printoptions(precision=8)
+    #         for _ in range(self.dims[0]):
+    #             for _ in range(self.dims[1]):
+    #                 ind = self.site2index(site)
+    #                 if ind not in marked: # avoid repeated computations
+    #                     psi_B = self.psiB_mps(site)
+    #                     AA_norm = AA_norm_dict[ind]
+    #                     AB_norm = get_norm(TM_psiA_psiB(psi_A_dict[ind], psi_B))
+    #                     BB_norm = get_norm(TM_psiB_psiB(psi_B))
+    #                     res = (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real
+    #                     diff = max(diff, res/AA_norm.to_number())
+    #                     loss += res
+    #                     marked.add(ind)
+    #                 site = self.nn_site(site, (-1, 1))
+    #             site = self.nn_site(site, (1, 1))
+    #         return loss
+
+    #     def closure():
+    #         optimizer.zero_grad()
+    #         loss = diff_loss()
+    #         # + mu*self.nuclear_norm_loss()
+    #         # loss.backward()
+    #         return loss
+
+    #     init()
+    #     loss_history = [torch.inf]
+    #     for epoch in range(1, epochs+1):
+    #         loss = optimizer.step(closure)
+    #         print(f"epoch-{epoch:d}: loss={loss}")
+    #         if torch.isclose(loss, torch.zeros(1, dtype=loss.dtype)) or torch.abs(loss - loss_history[-1]) < loss*loop_threshold:
+    #             break
+    #         loss_history.append(loss)
+
+    #     for data in data_list:
+    #         data.detach_()
+    #     return diff
+
+    # def loop_optimize_AD(self, epochs, loop_threshold, mu=0.0):
+    #     """
+    #     Perform AD optimization to compress the periodic mps.
+    #     mu is the hyper-parameter for nuclear-norm regularization.
+    #     """
+
+    #     def compress_decomp_T_data():
+    #         data_list, slice_list, meta_list = [], [], []
+    #         start = 0
+    #         for T in self.indep_decomp_T():
+    #             data, meta = T.compress_to_1d()
+    #             data_list.append(data)
+    #             slice_list.append(slice(start, start + len(data)))
+    #             meta_list.append(meta)
+    #             start += len(data)
+    #         return torch.concat(data_list), meta_list, slice_list
+
+    #     def decompress_decomp_T_data_(data, slice_list):
+    #         i = 0
+    #         marked = set()
+    #         site = self.sites()[0]
+    #         for _ in range(self.dims[0]):
+    #             for _ in range(self.dims[1]):
+    #                 tl, tr, bl, br = self.site2index(site), self.site2index(self.nn_site(site, "r")), self.site2index(self.nn_site(site, "b")), self.site2index(self.nn_site(site, "br"))
+    #                 if (tl, "br") not in marked:
+    #                     marked.add((tl, "br"))
+    #                     self.psi_rg[self.site_rg_map[(tl, "br")][1]].tl._data = data[slice_list[i]]
+    #                     i += 1
+    #                 if (tr, "tr") not in marked:
+    #                     marked.add((tr, "tr"))
+    #                     self.psi_rg[self.site_rg_map[(tr, "tr")][0]].tr._data = data[slice_list[i]]
+    #                     i += 1
+    #                 if (br, "br") not in marked:
+    #                     marked.add((br, "br"))
+    #                     self.psi_rg[self.site_rg_map[(br, "br")][0]].br._data = data[slice_list[i]]
+    #                     i += 1
+    #                 if (bl, "tr") not in marked:
+    #                     marked.add((bl, "tr"))
+    #                     self.psi_rg[self.site_rg_map[(bl, "tr")][1]].bl._data = data[slice_list[i]]
+    #                     i += 1
+    #                 site = self.nn_site(site, (-1, 1))
+    #             site = self.nn_site(site, (1, 1))
+
+
+    #     psi_A_dict, AA_norm_dict = {}, {}
+    #     diff = 0
+    #     def init():
+    #         nonlocal psi_A_dict, AA_norm_dict
+    #         site = self.nn_site(self.sites()[0], 'b')
+    #         for _ in range(self.dims[0]):
+    #             for _ in range(self.dims[1]):
+    #                 ind = self.site2index(site)
+    #                 psi_A = self.psiA_mps(site)
+    #                 psi_A_dict[ind] = psi_A
+    #                 AA_norm_dict[ind] = get_norm(TM_psiA_psiA(psi_A))
+    #                 site = self.nn_site(site, (-1, 1))
+    #             site = self.nn_site(site, (1, 1))
+
+    #     def diff_loss():
+    #         nonlocal diff
+    #         site = self.nn_site(self.sites()[0], 'b')
+    #         loss = 0.0
+    #         marked = set()
+    #         torch.set_printoptions(precision=8)
+    #         for _ in range(self.dims[0]):
+    #             for _ in range(self.dims[1]):
+    #                 ind = self.site2index(site)
+    #                 if ind not in marked: # avoid repeated computations
+    #                     psi_B = self.psiB_mps(site)
+    #                     AA_norm = AA_norm_dict[ind]
+    #                     AB_norm = get_norm(TM_psiA_psiB(psi_A_dict[ind], psi_B))
+    #                     BB_norm = get_norm(TM_psiB_psiB(psi_B))
+    #                     res = (AA_norm + BB_norm - AB_norm - AB_norm.conj()).to_number().real
+    #                     diff = max(diff, res.detach()/AA_norm.to_number())
+    #                     loss += res
+    #                     marked.add(ind)
+    #                 site = self.nn_site(site, (0, 2))
+    #             site = self.nn_site(site, (2, 0))
+    #         return loss
+
+    #     def loss(data, slice_list):
+    #         decompress_decomp_T_data_(data, slice_list)
+    #         loss = diff_loss() + mu*self.nuclear_norm_loss()
+    #         print(loss)
+    #         return loss
+
+    #     init()
+    #     x0, meta_list, slice_list = compress_decomp_T_data()
+    #     # res = minimize(lambda x:loss(x, slice_list) , x0, method="newton-cg", options=dict(xtol=1e-9), max_iter=3000, disp=0)
+    #     res = minimize(lambda x:loss(x, slice_list) , x0, method="l-bfgs", options=dict(gtol=1e-9, xtol=1e-9), max_iter=3000, disp=0)
+    #     decompress_decomp_T_data_(res.x, slice_list)
+
+    #     return diff
+
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -500,7 +580,7 @@ def main():
     parser.add_argument("--max_rg_steps", type=int, default=25)
     parser.add_argument("--mu", type=float, default=0.0)
     parser.add_argument("--method", type=str, default="AD")
-    parser.add_argument("--filter_threshold", type=float, default=1e-9)
+    parser.add_argument("--filter_threshold", type=float, default=1e-8)
     parser.add_argument("--filter_max_sweeps", type=int, default=int(5e3))
     parser.add_argument("--loop_threshold", type=float, default=1e-9)
     parser.add_argument("--output", type=str, default="tmp")
@@ -523,6 +603,7 @@ def main():
 
     f_history = []
     psi = Ising_Z2_symmetric(beta=beta_c)
+    # psi = Ising_dense(beta=beta_c)
     loop_tnr = LoopTNR(psi, D_max)
 
     res = 0
@@ -533,6 +614,7 @@ def main():
         norm = Ising_post_processing(loop_tnr)
         res += np.log(norm)/2**(step+1)
         logging.info(f"step-{step:d}: truncation error={truncate_err}, norm={norm}")
+        print(f"step-{step:d}: truncation error={truncate_err}, norm={norm}")
         f = -1/beta_c *(res + np.log(trace_2x2(loop_tnr))/2**(step+3)).real
         f_history.append(f.numpy())
     logging.info(f_history)

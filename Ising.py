@@ -40,10 +40,19 @@ def Ising_dense(beta, h=0):
     T = yastn.Tensor(config=config, s=(1, 1, -1, -1))
     T.set_block(Ds=(2,2,2,2), val=T_data)
 
-    pattern = {(0,0):0, (0,1):1, (1,0):1, (1,1):0}
+    # pattern = {(0,0):0, (0,1):1, (1,0):1, (1,1):0}
+    # tensors={
+    #     (0,0):T,
+    #     (0,1):T
+    # }
+
+    # better performance
+    pattern = {(0,0):0, (0,1):1, (1,0):2, (1,1):3}
     tensors={
         (0,0):T,
-        (0,1):T
+        (0,1):T,
+        (1,0):T,
+        (1,1):T,
     }
     return Peps(RectangularUnitcell(pattern, 'infinite'), tensors=tensors)
 
@@ -76,10 +85,19 @@ def Ising_Z2_symmetric(beta):
                     if (i+j+k+l) % 2 == 0:
                         T.set_block(ts=(i, j, k, l), Ds=(1,1,1,1), val=np.exp(beta*(i+j+k+l-2)))
 
-    pattern = {(0,0):0, (0,1):1, (1,0):1, (1,1):0}
+    # pattern = {(0,0):0, (0,1):1, (1,0):1, (1,1):0}
+    # tensors={
+    #     (0,0):T,
+    #     (0,1):T
+    # }
+
+    # better performance
+    pattern = {(0,0):0, (0,1):1, (1,0):2, (1,1):3}
     tensors={
         (0,0):T,
-        (0,1):T
+        (0,1):T,
+        (1,0):T,
+        (1,1):T,
     }
     return Peps(RectangularUnitcell(pattern, 'infinite'), tensors=tensors)
 
